@@ -112,8 +112,9 @@ animate();
 1. In JS, `import inspector from 'threeshanshika';`
 2. In JS, `inspector.patch(myMaterial);`
 3. In JS, `inspector.init(renderer, scene, camera);`
-4. In GLSL, `inspect("label/tag", glsl_variable, slot_number_0_to_3);`  
+4. In GLSL, `inspect("label/tag", glsl_variable, slot_number_0_to_3, flat: mainly useful for vertext variables it is optional);`  
     Slots are limited because each one requires a separate data output from the GPU, and WebGL has a hardware limit on the number of available outputs (typically 4-8 total).
+    flat tell that you do not want inspect interpolated value, our tool is taking values from fragment shader (not dirctally vertex) by sending debug data as varying from the vertext shader in this case even our vertext position can be interpolated which is nonesense that where flat come in picture it prevent vaalues to be interpolated.
 
 Now, run your Three.js project. When you hover over the mesh, the inspector tooltip will appear, showing the live values.
 
