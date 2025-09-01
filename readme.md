@@ -97,7 +97,7 @@ const renderer = new THREE.WebGLRenderer();
 document.body.appendChild(renderer.domElement);
 
 // Finally, initialize the inspector.
-inspector.init(renderer); // step 3
+inspector.init(renderer, scene, camera); // step 3
 
 // Your render loop
 function animate(time) {
@@ -111,7 +111,7 @@ animate();
 **Four step process in your code:**
 1. In JS, `import inspector from 'threeshanshika';`
 2. In JS, `inspector.patch(myMaterial);`
-3. In JS, `inspector.init(renderer);`
+3. In JS, `inspector.init(renderer, scene, camera);`
 4. In GLSL, `inspect("label/tag", glsl_variable, slot_number_0_to_3);`  
     Slots are limited because each one requires a separate data output from the GPU, and WebGL has a hardware limit on the number of available outputs (typically 4-8 total).
 
