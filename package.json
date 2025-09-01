@@ -1,0 +1,24 @@
+{
+    "name": "threeshanshika",
+    "version": "0.1.0",
+    "description": "A live shader inspector for Three.js",
+    "author": "adarsh1927",
+    "license": "MIT",
+    "type": "module",
+    "main": "dist/threeshanshika.umd.js",
+    "module": "dist/threeshanshika.es.js",
+    "files": [
+        "dist"
+    ],
+    "scripts": {
+        "dev": "vite build --watch",
+        "build": "vite build"
+    },
+    "peerDependencies": {
+        "three": ">=0.140.0"
+    },
+    "devDependencies": {
+        "three": "^0.160.0",
+        "vite": "^7.1.3"
+    }
+}
