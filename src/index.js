@@ -5,20 +5,25 @@
  * @license MIT
  */
 
-import { WebGLRenderTarget, FloatType, Raycaster, Vector2, Color } from 'three';
+ // In threeshanshika/src/index.js
+// --- FINAL, DEFINITIVE VERSION ---
+
+import { WebGLRenderTarget, FloatType, Raycaster, Vector2, Layers } from 'three';
 import { instrumentShader } from './core/GLSLInstrumenter.js';
 import { Tooltip } from './ui/Tooltip.js';
 
 const inspector = {
-    // --- STATE ---
+    // --- STATE & DEFAULTS ---
     _renderer: null, _camera: null, _scene: null, _tooltip: null, _isInitialized: false,
-    _mrt: null, _capturedVarsByMaterial: new Map(), _debugDataBuffer: new Float32Array(4),
-    _colorDataBuffer: new Float32Array(4), // For reading the final alpha
+    _mrt: null, _capturedVarsByMaterial: new Map(),
+    _debugDataBuffer: new Float32Array(4),
+    _colorDataBuffer: new Float32Array(4),
     _originalRenderMethod: null,
-
-    // --- RAYCASTING ---
     _raycaster: new Raycaster(), _mouse: new Vector2(),
-    _activeMaterial: null, _lastTooltipX: 0, _lastTooltipY: 0,
+    _lastTooltipX: 0, _lastTooltipY: 0,
+    _debugLayer: new Layers(),
+
+    // --- PUBLIC API ---
 
     init(renderer, scene, camera) {
         if (!renderer || !scene || !camera) {
@@ -32,6 +37,7 @@ const inspector = {
         this._camera = camera;
         this._isInitialized = true;
         this._tooltip = new Tooltip();
+        this._debugLayer.set(31); // Use an uncommon layer for the debug pass
         this._addEventListeners();
         this._overrideRenderMethod();
         console.log("Threeshanshika Inspector: Initialized and ready.");
@@ -39,50 +45,55 @@ const inspector = {
 
     patch(material) {
         if (!material) { console.warn("Threeshanshika: patch() called with a null or undefined material."); return; }
-        if (material.userData.isPatchedByInspector) return;
+        if (material.userData.isPatchedByInspector) { console.warn("Threeshanshika: Material already patched.", material); return; }
         this._applyPatch(material);
     },
 
-    // (_applyPatch is correct from our last step and does not need to change)
+    /**
+     * Sets the raycasting threshold for THREE.Points objects.
+     * This is ESSENTIAL for allowing the mouse to "hit" particles.
+     * @param {number} threshold The distance in world units to consider a hit. A good default is 0.1.
+     */
+    setRaycastThreshold(threshold) {
+        if (typeof threshold !== 'number') {
+            console.error("Threeshanshika: setRaycastThreshold() expects a number.");
+            return;
+        }
+        this._raycaster.params.Points.threshold = threshold;
+    },
+
+    // --- PRIVATE METHODS ---
+
     _applyPatch(material) {
-        if (material.userData.isPatchedByInspector) return;
         material.onBeforeCompile = (shader) => {
             const vsResult = instrumentShader(shader.vertexShader, 'vertex');
             const fsResult = instrumentShader(shader.fragmentShader, 'fragment');
             const allVars = [...vsResult.inspectedVars, ...fsResult.inspectedVars];
             if (allVars.length === 0) return;
+
             const allUsedSlots = [...new Set(allVars.map(v => v.slot))].sort((a,b)=>a-b);
             const vsUsedSlots = [...new Set(vsResult.inspectedVars.map(v => v.slot))].sort((a,b)=>a-b);
-            let vsDeclarations = '';
-            for (const slot of vsUsedSlots) { vsDeclarations += `${vsResult.inspectedVars.find(v => v.slot === slot).isFlat ? 'flat ' : ''}varying vec4 threeshanshika_v_debug_${slot};\n`; }
-            let finalVertexShader = vsResult.modifiedCode;
-            if (vsDeclarations) {
-                const lines = finalVertexShader.split('\n');
-                let insertionPoint = 0;
-                for (let i = 0; i < lines.length; i++) { const line = lines[i].trim(); if (line.startsWith('#version') || line.startsWith('precision')) { insertionPoint = i + 1; } if (line.startsWith('void main()')) { break; } }
-                lines.splice(insertionPoint, 0, vsDeclarations);
-                finalVertexShader = lines.join('\n');
-            }
-            shader.vertexShader = finalVertexShader;
-            let fsDeclarations = '';
-            let fsAssignments = '';
-            for (const slot of allUsedSlots) { fsDeclarations += `layout(location = ${slot + 1}) out vec4 threeshanshika_f_debug_${slot};\n`; }
+
+            let vertexDeclarations = '', fragmentDeclarations = '';
             for (const slot of vsUsedSlots) {
-                const vsVar = vsResult.inspectedVars.find(v => v.slot === slot);
-                fsDeclarations += `${vsVar.isFlat ? 'flat ' : ''}varying vec4 threeshanshika_v_debug_${slot};\n`;
-                fsAssignments += `    threeshanshika_f_debug_${slot} = threeshanshika_v_debug_${slot};\n`;
+                const isFlat = vsResult.inspectedVars.find(v => v.slot === slot).isFlat;
+                const varyingDecl = `${isFlat ? 'flat ' : ''}varying vec4 threeshanshika_v_debug_${slot};\n`;
+                vertexDeclarations += varyingDecl;
+                fragmentDeclarations += varyingDecl;
             }
-            let finalFragmentShader = fsResult.modifiedCode;
-            const mainFunctionIndex = finalFragmentShader.indexOf('void main()');
-            if (mainFunctionIndex === -1) return;
-            const lines = finalFragmentShader.split('\n');
-            let insertionPoint = 0;
-            for (let i = 0; i < lines.length; i++) { const line = lines[i].trim(); if (line.startsWith('#version') || line.startsWith('precision')) { insertionPoint = i + 1; } if (line.startsWith('void main()')) { break; } }
-            lines.splice(insertionPoint, 0, fsDeclarations);
-            finalFragmentShader = lines.join('\n');
-            const mainOpeningBrace = finalFragmentShader.indexOf('{', mainFunctionIndex);
-            finalFragmentShader = finalFragmentShader.slice(0, mainOpeningBrace + 1) + '\n' + fsAssignments + finalFragmentShader.slice(mainOpeningBrace + 1);
-            shader.fragmentShader = finalFragmentShader;
+            for (const slot of allUsedSlots) {
+                fragmentDeclarations += `layout(location = ${slot + 1}) out vec4 threeshanshika_f_debug_${slot};\n`;
+            }
+
+            shader.vertexShader = vsResult.modifiedCode;
+            shader.fragmentShader = fsResult.modifiedCode;
+
+            if (vertexDeclarations) shader.vertexShader = shader.vertexShader.replace('void main()', vertexDeclarations + 'void main()');
+            if (fragmentDeclarations) shader.fragmentShader = shader.fragmentShader.replace('void main()', fragmentDeclarations + 'void main()');
+            
+            const assignments = vsResult.fragmentVaryingAssignments;
+            if (assignments) shader.fragmentShader = shader.fragmentShader.replace('void main() {', 'void main() {\n' + assignments);
+
             const sortedVars = allVars.sort((a, b) => a.slot - b.slot);
             this._capturedVarsByMaterial.set(material.uuid, sortedVars);
             const highestSlot = Math.max(...allUsedSlots);
@@ -92,14 +103,88 @@ const inspector = {
         material.userData.isPatchedByInspector = true;
     },
 
+    _render(scene, camera) {
+        // Pass 1: Always render the full scene to the screen first.
+        // This is CRITICAL. It triggers onBeforeCompile for any new materials,
+        // which populates our _capturedVarsByMaterial map BEFORE we check it.
+        this._renderer.setRenderTarget(null);
+        this._originalRenderMethod(scene, camera);
+
+        // Now that all materials are compiled and registered, we can safely check for intersections.
+        this._raycaster.setFromCamera(this._mouse, camera);
+        const intersects = this._raycaster.intersectObjects(scene.children, true);
+        
+        let hoveredObject = null;
+        if (intersects.length > 0 && intersects[0].object.material && this._capturedVarsByMaterial.has(intersects[0].object.material.uuid)) {
+            hoveredObject = intersects[0].object;
+        }
+
+        // Pass 2: If we are hovering over an inspectable object, perform the special debug render.
+        if (hoveredObject) {
+            const originalLayers = hoveredObject.layers.mask;
+            const originalCameraLayers = camera.layers.mask;
+
+            hoveredObject.layers.set(31);
+            camera.layers.set(31);
+
+            this._renderer.setRenderTarget(this._mrt);
+            // We render again, this time to our off-screen target to capture debug data.
+            this._originalRenderMethod(scene, camera);
+
+            hoveredObject.layers.mask = originalLayers;
+            camera.layers.mask = originalCameraLayers;
+            
+            this._updateTooltip(hoveredObject);
+        } else {
+            this._tooltip.hide();
+        }
+    },
+
+    _updateTooltip(hoveredObject) {
+        const material = hoveredObject.material;
+        const capturedVars = this._capturedVarsByMaterial.get(material.uuid);
+        if (!capturedVars) { this._tooltip.hide(); return; }
+
+        const rect = this._renderer.domElement.getBoundingClientRect();
+        const canvasX = this._lastTooltipX - rect.left;
+        const canvasY = rect.height - (this._lastTooltipY - rect.top);
+
+        this._renderer.readRenderTargetPixels(this._mrt, canvasX, canvasY, 1, 1, this._colorDataBuffer, 0);
+        const finalAlpha = this._colorDataBuffer[3];
+        
+        if (finalAlpha < 0.01) { this._tooltip.hide(); return; }
+
+        let tooltipContent = '';
+        for (const { label, slot } of capturedVars) {
+            const renderTargetIndex = slot + 1;
+            this._renderer.readRenderTargetPixels(this._mrt, canvasX, canvasY, 1, 1, this._debugDataBuffer, renderTargetIndex);
+            
+            const [r, g, b, a] = this._debugDataBuffer;
+            let valueStr = '';
+
+            if (a < 0.5) {
+                valueStr = '<unwritten>';
+            } else if (Math.abs(r - g) < 0.001 && Math.abs(g - b) < 0.001) {
+                valueStr = r.toFixed(3);
+            } else {
+                valueStr = `\n  R|X: ${r.toFixed(3)}\n  G|Y: ${g.toFixed(3)}\n  B|Z: ${b.toFixed(3)}`;
+            }
+            tooltipContent += `${label}: ${valueStr}\n`;
+        }
+        this._tooltip.show(this._lastTooltipX, this._lastTooltipY, tooltipContent.trim());
+    },
+
+    _updateRenderTarget(requiredTargets) {
+        if (!this._mrt || this._mrt.count < requiredTargets) {
+            if (this._mrt) this._mrt.dispose();
+            const { width, height } = this._renderer.domElement;
+            this._mrt = new WebGLRenderTarget(width, height, { count: requiredTargets, type: FloatType });
+        }
+    },
+
     _addEventListeners() {
         this._renderer.domElement.addEventListener('mousemove', this._onMouseMove.bind(this));
         this._renderer.domElement.addEventListener('mouseleave', this._onMouseLeave.bind(this));
-    },
-
-    _overrideRenderMethod() {
-        this._originalRenderMethod = this._renderer.render.bind(this._renderer);
-        this._renderer.render = this._render.bind(this);
     },
     
     _onMouseMove(event) {
@@ -111,98 +196,14 @@ const inspector = {
     },
 
     _onMouseLeave() {
-        this._mouse.set(999, 999); 
+        this._mouse.set(9999, 9999);
         this._tooltip.hide();
     },
-
-    // In threeshanshika/src/index.js - REPLACE THIS ENTIRE FUNCTION
-
-    _render(scene, camera) {
-        // Raycaster logic to find the hovered material
-        this._raycaster.setFromCamera(this._mouse, camera);
-        const intersects = this._raycaster.intersectObjects(scene.children, true);
-        let hoveredMaterial = null;
-        if (intersects.length > 0) {
-            const firstObject = intersects[0].object;
-            if (firstObject.material && this._capturedVarsByMaterial.has(firstObject.material.uuid)) {
-                hoveredMaterial = firstObject.material;
-            }
-        }
-        this._activeMaterial = hoveredMaterial;
-        
-        // The render passes are correct.
-        const hasPatchedMaterials = this._capturedVarsByMaterial.size > 0;
-        if (hasPatchedMaterials && this._mrt) {
-            this._renderer.setRenderTarget(this._mrt);
-            this._originalRenderMethod(scene, camera);
-            
-            this._renderer.setRenderTarget(null);
-            this._originalRenderMethod(scene, camera);
-        } else {
-            this._originalRenderMethod(scene, camera);
-        }
-
-        // --- THIS IS THE FINAL, CORRECTED TOOLTIP LOGIC ---
-        if (this._activeMaterial) {
-            const capturedVars = this._capturedVarsByMaterial.get(this._activeMaterial.uuid);
-            if (!capturedVars || capturedVars.length === 0) { this._tooltip.hide(); return; }
-            
-            const rect = this._renderer.domElement.getBoundingClientRect();
-            const canvasX = this._lastTooltipX - rect.left;
-            const canvasY = this._lastTooltipY - rect.top;
-
-            // First, perform the Hybrid Alpha Check to see if we should show the tooltip at all.
-            this._renderer.readRenderTargetPixels(this._mrt, canvasX, this._mrt.height - canvasY, 1, 1, this._colorDataBuffer, 0);
-            const finalAlpha = this._colorDataBuffer[3];
-            const epsilon = 0.001;
-
-            if (finalAlpha < epsilon) {
-                this._tooltip.hide();
-                return;
-            }
-
-            // If we should show it, build the content string.
-            const clearColor = this._renderer.getClearColor(new Color());
-            let tooltipContent = '';
-            
-            // This is the new, simple, robust loop.
-            for (const { label, slot, isFlat } of capturedVars) {
-                // STEP 1: Always read the fresh data for the CURRENT variable.
-                const renderTargetIndex = slot + 1;
-                this._renderer.readRenderTargetPixels(this._mrt, canvasX, this._mrt.height - canvasY, 1, 1, this._debugDataBuffer, renderTargetIndex);
-                const [r, g, b] = this._debugDataBuffer;
-
-                // STEP 2: Format the value string based on the fresh data.
-                let valueStr = '';
-                const isDiscarded = isFlat &&
-                                Math.abs(r - clearColor.r) < epsilon &&
-                                Math.abs(g - clearColor.g) < epsilon &&
-                                Math.abs(b - clearColor.b) < epsilon;
-
-                if (isDiscarded) {
-                    valueStr = ''; // Your "Empty on Discard" polish
-                } else if (Math.abs(r - g) < epsilon && Math.abs(g - b) < epsilon) {
-                    valueStr = r.toFixed(3); // Assumed float
-                } else {
-                    valueStr = `\n  R|X: ${r.toFixed(3)}\n  G|Y: ${g.toFixed(3)}\n  B|Z: ${b.toFixed(3)}`;
-                }
-                tooltipContent += `${label}: ${valueStr}\n`;
-            }
-            this._tooltip.show(this._lastTooltipX, this._lastTooltipY, tooltipContent.trim());
-        } else {
-            this._tooltip.hide();
-        }
+    
+    _overrideRenderMethod() {
+        this._originalRenderMethod = this._renderer.render.bind(this._renderer);
+        this._renderer.render = this._render.bind(this);
     },
-
-    _updateRenderTarget(requiredSlots) {
-        const requiredTargets = requiredSlots;
-        if (!this._mrt || this._mrt.count < requiredTargets) {
-            if (this._mrt) this._mrt.dispose();
-            const { width, height } = this._renderer.domElement;
-            console.log(`Threeshanshika: Creating MRT with ${requiredTargets} targets.`);
-            this._mrt = new WebGLRenderTarget(width, height, { count: requiredTargets, type: FloatType });
-        }
-    }
 };
 
 export default inspector;

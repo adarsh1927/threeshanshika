@@ -15,3 +15,5 @@ yarn-error.log*
 
 *.tgz
 .backup
+export.md
+whole_project_structure.md
