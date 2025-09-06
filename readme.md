@@ -124,7 +124,7 @@ Now, run your Three.js project. When you hover over the mesh, the inspector tool
 threeshanshika/
 ├── .gitignore
 ├── dist/
-│   ├── threeshanshika.esm.js
+│   ├── threeshanshika.es.js
 │   └── threeshanshika.umd.js
 ├── src/
 │   ├── core/
